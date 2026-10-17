@@ -2,8 +2,13 @@ services:
   api:
     build: .
     env_file: .env
+    environment:
+      JWT_PRIVATE_KEY_PATH: /run/secrets/jwt-private.pem
+      JWT_PUBLIC_KEY_PATH: /run/secrets/jwt-public.pem
     ports:
       - "8000:8000"
+    volumes:
+      - ./.secrets:/run/secrets:ro
     depends_on:
       db:
         condition: service_healthy
@@ -14,6 +19,11 @@ services:
     build: .
     command: celery -A app.tasks.celery_app:celery_app worker --loglevel=info
     env_file: .env
+    environment:
+      JWT_PRIVATE_KEY_PATH: /run/secrets/jwt-private.pem
+      JWT_PUBLIC_KEY_PATH: /run/secrets/jwt-public.pem
+    volumes:
+      - ./.secrets:/run/secrets:ro
     depends_on:
       db:
         condition: service_healthy

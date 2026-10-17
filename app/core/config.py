@@ -9,7 +9,8 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/agentdb"
     redis_url: str = "redis://localhost:6379/0"
     openai_api_key: str = ""
-    jwt_secret_key: str = "development-only-change-me"
+    jwt_private_key_path: str = ".secrets/jwt-private.pem"
+    jwt_public_key_path: str = ".secrets/jwt-public.pem"
     access_token_expire_minutes: int = 60
     openai_model: str = "gpt-4o-mini"
     agent_max_tool_rounds: int = 5
@@ -21,4 +22,3 @@ def get_settings() -> Settings:
 
 
 settings = get_settings()
-

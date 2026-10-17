@@ -17,11 +17,15 @@ Requirements: Docker Compose and an OpenAI API key.
 ```sh
 # .env is provided for local Compose use. If recreating it, start from:
 cp .env.example .env
-# Set OPENAI_API_KEY and replace JWT_SECRET_KEY in .env.
+# Generate a local RS256 key pair (keep .secrets private and untracked):
+mkdir -p .secrets
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out .secrets/jwt-private.pem
+openssl pkey -in .secrets/jwt-private.pem -pubout -out .secrets/jwt-public.pem
+# Set OPENAI_API_KEY in .env.
 docker compose up --build
 ```
 
-The local `.env` is excluded from Git and the Docker build context. Compose loads it for the API and worker, and uses its PostgreSQL settings to configure the database container.
+The local `.env` and `.secrets/` are excluded from Git and the Docker build context. Compose loads `.env` for the API, worker, and database settings, and mounts the RS256 key pair read-only into the API and worker containers.
 
 The API and worker wait for PostgreSQL and Redis. The API container applies Alembic migrations before startup. OpenAPI docs are at <http://localhost:8000/docs>; the health endpoint is <http://localhost:8000/health>.
 
