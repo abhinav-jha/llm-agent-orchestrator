@@ -7,6 +7,7 @@ import pytest
 
 from app.core.config import settings
 from app.core.security import create_access_token, decode_access_token, hash_password, verify_password
+from app.main import app
 
 
 @pytest.fixture
@@ -38,6 +39,16 @@ def test_password_hash_verifies_only_original_password() -> None:
     assert not verify_password("incorrect password", password_hash)
 
 
+def test_long_password_hash_verifies() -> None:
+    password = "correct horse battery staple " * 5
+    assert len(password.encode()) > 72
+
+    password_hash = hash_password(password)
+
+    assert verify_password(password, password_hash)
+    assert not verify_password(f"{password}wrong", password_hash)
+
+
 def test_access_token_round_trips_user_id(rsa_key_paths) -> None:
     user_id = uuid4()
     token = create_access_token(user_id)
@@ -48,3 +59,9 @@ def test_access_token_round_trips_user_id(rsa_key_paths) -> None:
 
 def test_invalid_access_token_is_rejected(rsa_key_paths) -> None:
     assert decode_access_token("not-a-jwt") is None
+
+
+def test_openapi_uses_bearer_auth_without_oauth2_client_fields() -> None:
+    security_schemes = app.openapi()["components"]["securitySchemes"]
+
+    assert security_schemes["HTTPBearer"] == {"type": "http", "scheme": "bearer"}
