@@ -9,7 +9,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import CurrentUser, SessionDep
-from app.models import AgentRun, Conversation
+from app.db.session import AsyncSessionLocal
+from app.models import AgentRun, Conversation, User
 from app.schemas import (
     ChatRequest,
     ConversationDetail,
@@ -52,17 +53,27 @@ async def chat_stream(
     payload: ChatRequest, session: SessionDep, user: CurrentUser
 ) -> StreamingResponse:
     conversation = await _owned_conversation(session, user.id, payload.conversation_id)
+    await session.commit()
+    conversation_id = conversation.id
+    user_id = user.id
 
     async def events() -> AsyncIterator[str]:
-        try:
-            async for event in stream_agent_response(
-                session, user, conversation, payload.prompt
-            ):
-                yield _sse(event)
-        except Exception:
-            await session.rollback()
-            logger.exception("Streaming agent request failed")
-            yield _sse({"type": "error", "message": "Agent request failed"})
+        async with AsyncSessionLocal() as stream_session:
+            try:
+                stream_user = await stream_session.get(User, user_id)
+                stream_conversation = await stream_session.get(Conversation, conversation_id)
+                if stream_user is None or stream_conversation is None:
+                    raise LookupError("Conversation or user no longer exists")
+                if stream_conversation.user_id != user_id:
+                    raise LookupError("Conversation is not owned by the authenticated user")
+                async for event in stream_agent_response(
+                    stream_session, stream_user, stream_conversation, payload.prompt
+                ):
+                    yield _sse(event)
+            except Exception:
+                await stream_session.rollback()
+                logger.exception("Streaming agent request failed")
+                yield _sse({"type": "error", "message": "Agent request failed"})
 
     return StreamingResponse(
         events(),
