@@ -20,6 +20,7 @@ dependencies = [
     "pgvector>=0.3,<1",
     "pydantic-settings>=2.7,<3",
     "python-jose[cryptography]>=3.3,<4",
+    "redis>=5,<6",
     "sqlalchemy[asyncio]>=2.0,<3",
     "uvicorn[standard]>=0.34,<1",
 ]

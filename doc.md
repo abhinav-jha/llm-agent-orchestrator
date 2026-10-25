@@ -6,7 +6,7 @@ This project is a backend for authenticated, tool-using AI conversations. It off
 
 - FastAPI endpoints for account registration, login, chat streaming, conversation reads, and background runs.
 - PostgreSQL persistence through async SQLAlchemy, including user-scoped vector memories in pgvector.
-- Gemini 2.5 Flash chat completion and Gemini Embedding 001 calls.
+- Gemini `gemini-2.5-flash` chat completion and `gemini-embedding-001` embeddings.
 - Server-Sent Events (SSE) for interactive agent turns.
 - Celery workers, backed by Redis, for asynchronous agent runs.
 
@@ -17,7 +17,7 @@ This walkthrough follows the implementation in `app/`, its migration, tests, and
 ```text
 Client
   ├── /api/v1/auth/* ────────────────> FastAPI auth routes
-  ├── /api/v1/chat/stream ───────────> FastAPI agent route ──> orchestrator ──> Gemini 2.5 Flash
+  ├── /api/v1/chat/stream ───────────> FastAPI agent route ──> orchestrator ──> Gemini Flash
   │                                                           ├──> PostgreSQL messages
   │                                                           └──> memory service ──> Gemini embeddings
   └── /api/v1/runs ──────────────────> FastAPI agent route ──> Redis/Celery
@@ -63,9 +63,9 @@ Relevant files: [`app/api/agent.py`](app/api/agent.py), [`app/tasks/agent_tasks.
 
 ### 3.4 Memory
 
-Memory is written only through memory tools, which embed content with Gemini Embedding 001 and store the content and 1536-dimension vector. `search_memory` embeds a query and orders that user's memories by cosine distance. Both queries filter by authenticated user ID and embedding model. Migration `0002_gemini_embeddings` marks existing OpenAI vectors as legacy and leaves them preserved, but they are not searched with Gemini vectors.
+The current agent-session memory tools write 1536-dimension Gemini vectors to `long_term_memories`; retrieval uses cosine distance and filters by authenticated user and embedding model. Migration `0004_gemini_memory_model` tags pre-existing rows from the earlier OpenAI implementation as legacy and preserves them without mixing vector spaces. The re-embedding helper can migrate those rows in per-record commits.
 
-The tool layer validates argument names and basic content shape before calling the memory service. The model receives up to five results; the current implementation has no similarity cutoff, deduplication, expiry, or direct user-facing memory management route.
+The agent-session tool layer checks arguments against function signatures and only dispatches tools enabled for the session. The model receives up to three semantic memory results. Authenticated memory list, search, and delete routes are available; similarity cutoff, deduplication, and expiry are not implemented. `web_search` calls Tavily and requires `TAVILY_API_KEY`.
 
 Relevant files: [`app/services/memory.py`](app/services/memory.py), [`app/services/orchestrator.py`](app/services/orchestrator.py), [`app/models.py`](app/models.py).
 
@@ -74,7 +74,7 @@ Relevant files: [`app/services/memory.py`](app/services/memory.py), [`app/servic
 | File or area | Responsibility |
 | --- | --- |
 | [`app/main.py`](app/main.py) | Creates the FastAPI app, mounts auth and agent routers under `/api/v1`, and exposes `/health`. |
-| [`app/core/config.py`](app/core/config.py) | Loads environment-backed settings for PostgreSQL, Redis, Gemini, JWT keys, and agent limits. |
+| [`app/core/config.py`](app/core/config.py) | Loads environment-backed settings for PostgreSQL, Redis, Gemini, Tavily, JWT keys, and agent limits. |
 | [`app/core/security.py`](app/core/security.py) | Password hashing/verification and RS256 access-token creation/decoding. |
 | [`app/api/deps.py`](app/api/deps.py) | Session dependency and bearer-token-to-current-user dependency. |
 | [`app/api/auth.py`](app/api/auth.py) | Registration and login routes. |
@@ -83,8 +83,8 @@ Relevant files: [`app/services/memory.py`](app/services/memory.py), [`app/servic
 | [`app/models.py`](app/models.py) | SQLAlchemy models and relationships for users, conversations, messages, memories, and runs. |
 | [`app/db/base.py`](app/db/base.py) | Declarative SQLAlchemy metadata base. |
 | [`app/db/session.py`](app/db/session.py) | Async database engine, session factory, and request session dependency. |
-| [`app/services/orchestrator.py`](app/services/orchestrator.py) | System prompt, tool schemas and dispatch, message history construction, Gemini streaming loop, and message persistence. |
-| [`app/services/memory.py`](app/services/memory.py) | Gemini embedding requests, memory inserts, and cosine-distance search. |
+| [`app/services/orchestrator.py`](app/services/orchestrator.py) | System prompt, Gemini-compatible function schemas/streaming, tool dispatch, and message persistence. |
+| [`app/services/memory.py`](app/services/memory.py) | Gemini embedding requests, legacy-vector migration, long-term memory inserts, and cosine-distance search. |
 | [`app/tasks/celery_app.py`](app/tasks/celery_app.py) | Celery broker/backend configuration. |
 | [`app/tasks/agent_tasks.py`](app/tasks/agent_tasks.py) | Worker-side run lifecycle and invocation of the orchestration loop. |
 | [`migrations/env.py`](migrations/env.py) | Alembic configuration using application settings and SQLAlchemy model metadata. |
@@ -103,37 +103,46 @@ Relevant files: [`app/services/memory.py`](app/services/memory.py), [`app/servic
 - **User** owns conversations, memories, and runs.
 - **Conversation** belongs to a user and has ordered messages.
 - **Message** stores a role, optional content, optional tool-call payload, optional tool-call ID, and a per-conversation sequence number. `(conversation_id, sequence)` is unique.
-- **Memory** stores user-owned text and a pgvector embedding.
-- **AgentRun** stores the owner, conversation, prompt, status, result/error, Celery task ID, and creation time.
+- **Memory** is the historical user-owned text/vector table; current agent memories are stored separately in `LongTermMemory`. Legacy rows can be copied and re-embedded with the documented helper.
+- **AgentSession** stores the owner, system prompt, and enabled tools.
+- **AgentRun** stores owner, conversation/session, prompt, status, answer, token count, error, and Celery task ID.
+- **RunStep** stores durable model/tool/final-answer execution trace events.
 
-The initial migration enables the PostgreSQL `vector` extension and creates these tables and indexes. Conversation and memory ownership is enforced in route queries; foreign keys enforce parent existence and configured delete behavior.
+The initial migration enables the PostgreSQL `vector` extension and creates these tables and indexes. Conversation and memory ownership is enforced in route queries; foreign keys enforce parent existence and configured delete behavior. PostgreSQL/pgvector and Redis integration tests are opt-in under `tests/integration`.
 
 ### Routes
 
 | Method | Route | Authentication | Purpose |
 | --- | --- | --- | --- |
 | `POST` | `/api/v1/auth/register` | No | Create a user. |
-| `POST` | `/api/v1/auth/login` | No | Return a bearer token. |
+| `POST` | `/api/v1/auth/token` | No | Return a bearer token (`/auth/login` remains a compatibility alias). |
 | `POST` | `/api/v1/chat/stream` | Yes | Execute an interactive agent turn over SSE. |
 | `GET` | `/api/v1/conversations` | Yes | List the current user's conversations. |
 | `GET` | `/api/v1/conversations/{conversation_id}` | Yes | Read an owned conversation and non-tool messages. |
 | `POST` | `/api/v1/runs` | Yes | Queue a background agent run. |
 | `GET` | `/api/v1/runs/{run_id}` | Yes | Poll an owned background run. |
+| `GET`, `POST` | `/api/v1/sessions` | Yes | List or create owned agent sessions. |
+| `GET`, `DELETE` | `/api/v1/sessions/{session_id}` | Yes | Read or delete an owned session. |
+| `POST` | `/api/v1/sessions/{session_id}/run` | Yes | Queue a session run. |
+| `GET` | `/api/v1/runs/{run_id}/status` | Yes | Read run status and step count. |
+| `GET` | `/api/v1/runs/{run_id}/steps` | Yes | Read persisted execution steps. |
+| `GET` | `/api/v1/runs/{run_id}/stream` | Yes | Stream run events over SSE. |
+| `DELETE` | `/api/v1/runs/{run_id}` | Yes | Cancel an owned queued/running run. |
+| `GET` | `/api/v1/memory`, `/api/v1/memory/search` | Yes | List or search owned long-term memories. |
+| `DELETE` | `/api/v1/memory/{memory_id}` | Yes | Delete an owned memory. |
 | `GET` | `/health` | No | Return a simple process health response. |
 
-There are currently no routes for account deletion, conversation deletion/renaming, message pagination, or memory list/update/delete.
+There are currently no routes for account deletion, conversation deletion/renaming, or message pagination.
 
 ## 6. Agent behavior and constraints
 
-- The configured chat model defaults to `gemini-2.5-flash`; embeddings use `gemini-embedding-001`. Chat calls use Google's OpenAI-compatible endpoint with the existing OpenAI Python client as a protocol adapter; API keys are sent to Google, not OpenAI.
-- The default tool-round limit is five, and the orchestrator allows at most eight tool calls in one round.
-- Available tools are `search_memory`, `save_memory`, and `current_time`; dispatch is allow-listed.
-- Agent history is loaded as the latest 60 persisted messages. A system message is prepended, and any leading non-user messages in the selected history are discarded.
-- The final response is committed to PostgreSQL before the `done` event is emitted.
+- Gemini `gemini-2.5-flash` is the configured chat model; `gemini-embedding-001` produces 1536-dimensional vectors. Gemini chat uses Google's OpenAI-compatible endpoint and `GEMINI_API_KEY`; this deliberately differs from the original case study's OpenAI provider requirement.
+- Interactive Gemini chat uses `AGENT_MAX_TOOL_ROUNDS` and limits eight tool calls per round. Agent-session runs stop after ten model iterations.
+- The legacy conversation route has an eight-tool allow-list. Agent sessions expose five tools (`web_search`, `calculator`, `get_current_datetime`, `summarise_text`, and `remember_fact`); web search uses Tavily and requires `TAVILY_API_KEY`. Tool dispatch rechecks the session's enabled list and validates arguments.
+- Legacy conversation history loads up to 60 persisted messages; agent-session runs use Redis short-term history capped at ten messages, with up to three semantically relevant long-term memories.
+- New agent runs persist each trace step before publishing it and store token usage/final answers in PostgreSQL. The agent runner fails rather than returning a fabricated answer when it exhausts its iteration limit or receives no final text.
 - Agent errors are logged server-side. SSE callers receive a generic error message; failed background runs store a generic failure string.
-- Memory search is scoped to the user but currently returns the nearest five results regardless of their absolute similarity.
-
-**Documentation mismatch:** `NOTES.md` says each request loads the latest 21 persisted messages. The implementation in `app/services/orchestrator.py` loads up to 60. Update one side after deciding the intended context policy.
+- Memory search is scoped to the user and embedding model and returns up to three nearest results regardless of absolute similarity.
 
 ## 7. Review questions for a code walkthrough
 
@@ -158,7 +167,7 @@ These are questions to use in a product/engineering review, rather than assumpti
 ### Reliability, operations, and data
 
 11. **How should a queued run be reconciled if the database commit succeeds but broker dispatch or the later task-ID commit fails?** The current route does not atomically commit the run and publish the task.
-12. **What are the expected retry and timeout policies for Gemini, Redis, and PostgreSQL failures?**
+12. **What are the expected retry and timeout policies for Gemini, Tavily, Redis, and PostgreSQL failures?**
 13. **Is `/health` intended as liveness only, or should deployment also have a readiness check for database, Redis, and provider configuration?**
 14. **Which deployment target is supported?** Compose publishes database and Redis ports and uses development defaults, which should be reviewed before exposing the stack outside a local environment.
 15. **What are data retention, backup, and account-deletion requirements for conversations, prompts, run results, and memories?**
@@ -181,7 +190,7 @@ Priorities below are relative to preparing a dependable user-facing service; con
 2. **Use a token-aware context budget.** Preserve complete assistant-tool-call/tool-result groups when truncating history, and test histories that exceed the retained window.
 3. **Handle registration uniqueness races.** The pre-insert existence check can race another registration; convert the database unique constraint violation into the intended conflict response.
 4. **Add pagination and lifecycle APIs.** Paginate conversations/messages/runs and decide how users delete conversations or accounts, including cascade/retention expectations.
-5. **Add database-backed integration coverage.** Exercise migrations, ownership isolation, transaction rollback, pgvector operations, queue dispatch failures, worker status transitions, and SSE disconnect/error paths using PostgreSQL/pgvector, Redis, and mocked Gemini endpoints.
+5. **Extend database-backed integration coverage.** PostgreSQL/pgvector and Redis opt-in integration tests are available; expand them to cover migrations, transaction rollback, Celery worker transitions, and SSE error paths. Gemini and Tavily calls remain mocked in unit tests.
 6. **Improve readiness and observability.** Add readiness checks and structured metrics/log context for provider latency/errors, token usage/cost, run queue wait/execution duration, and stuck/failed runs. Avoid logging prompts or saved memories unless explicitly approved by privacy policy.
 
 ### P2 — Maintainability and UX polish
@@ -192,14 +201,20 @@ Priorities below are relative to preparing a dependable user-facing service; con
 4. **Add a reproducible CI/developer workflow.** Pin/lock resolved dependencies for deployable builds and run formatting/lint, type checks where adopted, unit tests, and migration checks in CI.
 5. **Measure before adding vector indexes.** Keep the current user filter and exact search while volumes are small; benchmark realistic data before selecting an ANN index and tuning its recall/latency trade-off.
 
-## 9. Existing tests and validation gaps
+## 9. Tests and validation
 
-The repository has three test modules covering password hashing (including long passwords), token round-tripping/rejection, OpenAPI bearer auth, chat stream session setup, and two tool-dispatch error cases. These are useful unit-level checks but do not exercise the full database, provider, broker, worker, or multi-request lifecycle.
+Unit tests mock Gemini, Tavily, Redis, Celery, and database session behavior. They cover chat
+stream and tool-call assembly, argument validation, enabled-tool enforcement, agent iteration
+limits, memory task types/dimensions/model filters, memory re-embedding, run state transitions,
+SSE cleanup, ownership filtering, cancellation, and task dispatch failure.
 
-`NOTES.md` already identifies several appropriate follow-ups: PostgreSQL/pgvector + Redis integration tests, rate limits and account recovery, outbox dispatch, streaming cancellation cleanup, pagination, memory lifecycle, token/cost observability, row-level security, vector indexing, backups, and deployment configuration.
+PostgreSQL/pgvector persistence and Redis history/pubsub round-trip tests are opt-in and require
+dedicated `TEST_DATABASE_URL` and `TEST_REDIS_URL`. Live Gemini and Tavily provider calls are
+not asserted by mocked unit tests; service credentials are required to validate those endpoints
+against the network.
 
 ## 10. Local startup summary
 
-The README's local workflow is to create `.env` from `.env.example`, generate an RS256 key pair under `.secrets/`, set a Gemini API key, and start the Compose stack. The API container applies Alembic migrations before starting Uvicorn; the worker starts Celery. The README documents `/docs` and `/health` as local endpoints.
+The README's local workflow is to create `.env` from `.env.example`, generate an RS256 key pair under `.secrets/`, set `GEMINI_API_KEY` and `TAVILY_API_KEY`, and start the Compose stack. The API container applies Alembic migrations before starting Uvicorn; the worker starts Celery. The React frontend is supplementary; `/docs` and `/health` expose the backend contract.
 
 The `.gitignore` and `.dockerignore` exclude local environment/key material. Keep that separation when adapting the container build or deploying; do not copy real local credentials into an image or commit them.

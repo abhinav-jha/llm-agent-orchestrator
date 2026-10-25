@@ -1,4 +1,3 @@
-import ast
 import json
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
@@ -10,6 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.agent.tools import calculator as safe_calculator
 from app.models import Conversation, Message, User
 from app.services.memory import save_memory, search_memories
 
@@ -123,30 +123,7 @@ MAX_TOOL_CALLS_PER_ROUND = 8
 
 
 def _evaluate_numeric_expression(expression: str) -> float:
-    tree = ast.parse(expression, mode="eval")
-
-    allowed_nodes = (
-        ast.Expression,
-        ast.BinOp,
-        ast.UnaryOp,
-        ast.Add,
-        ast.Sub,
-        ast.Mult,
-        ast.Div,
-        ast.Pow,
-        ast.USub,
-        ast.UAdd,
-        ast.Constant,
-        ast.Num,
-    )
-    for node in ast.walk(tree):
-        if not isinstance(node, allowed_nodes):
-            raise ValueError("Unsupported expression")
-
-    value = eval(compile(tree, "<calculator>", "eval"), {"__builtins__": {}}, {})
-    if not isinstance(value, (int, float)) or isinstance(value, bool):
-        raise ValueError("Calculator result must be numeric")
-    return float(value)
+    return float(safe_calculator(expression))
 
 
 def _client() -> AsyncOpenAI:
@@ -154,7 +131,8 @@ def _client() -> AsyncOpenAI:
         raise RuntimeError("GEMINI_API_KEY must be configured to run the agent")
     return AsyncOpenAI(
         api_key=settings.gemini_api_key,
-        base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+        base_url=settings.gemini_base_url,
+        timeout=settings.gemini_request_timeout_seconds,
     )
 
 

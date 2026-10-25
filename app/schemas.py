@@ -28,6 +28,63 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
 
 
+class AgentSessionCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    system_prompt: str = Field(default="", max_length=20_000)
+    tools_enabled: list[str] = Field(default_factory=list, max_length=20)
+
+
+class AgentSessionRead(BaseModel):
+    id: str
+    name: str
+    system_prompt: str
+    tools_enabled: list[str]
+    created_at: datetime
+
+
+class AgentSessionDetail(AgentSessionRead):
+    runs: list["AgentRunSummary"]
+
+
+class AgentRunSummary(BaseModel):
+    id: UUID
+    user_message: str
+    final_answer: Optional[str]
+    status: str
+    tokens_used: int
+    created_at: datetime
+
+
+class AgentRunCreate(BaseModel):
+    user_message: str = Field(min_length=1, max_length=20_000)
+
+
+class AgentRunAccepted(BaseModel):
+    run_id: UUID
+
+
+class AgentRunStatus(BaseModel):
+    id: UUID
+    status: str
+    tokens_used: int
+    step_count: int
+    created_at: datetime
+
+
+class RunStepRead(BaseModel):
+    id: str
+    step_type: str
+    payload: dict[str, object]
+    occurred_at: datetime
+
+
+class LongTermMemoryRead(BaseModel):
+    id: str
+    content: str
+    source_run_id: Optional[UUID]
+    created_at: datetime
+
+
 class ChatRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=20_000)
     conversation_id: Optional[UUID] = None
