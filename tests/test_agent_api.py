@@ -60,4 +60,5 @@ async def test_chat_stream_commits_conversation_and_uses_stream_session(monkeypa
 
     assert request_session.committed
     assert not stream_session.rolled_back
+    assert response.headers["X-Conversation-ID"] == str(conversation_id)
     assert b'data: {"type": "done", "content": "Hi"}' in chunks[0]

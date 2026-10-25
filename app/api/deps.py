@@ -1,4 +1,4 @@
-from typing import Annotated
+from typing import Annotated, Optional
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -13,7 +13,7 @@ SessionDep = Annotated[AsyncSession, Depends(get_session)]
 
 
 async def get_current_user(
-    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)],
+    credentials: Annotated[Optional[HTTPAuthorizationCredentials], Depends(bearer_scheme)],
     session: SessionDep,
 ) -> User:
     user_id = decode_access_token(credentials.credentials) if credentials else None

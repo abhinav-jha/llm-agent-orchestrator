@@ -1,6 +1,7 @@
 import json
 import logging
 from collections.abc import AsyncIterator
+from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, status
@@ -27,7 +28,7 @@ router = APIRouter(tags=["agent"])
 
 
 async def _owned_conversation(
-    session: SessionDep, user_id: UUID, conversation_id: UUID | None
+    session: SessionDep, user_id: UUID, conversation_id: Optional[UUID]
 ) -> Conversation:
     if conversation_id is None:
         conversation = Conversation(user_id=user_id)
@@ -57,7 +58,7 @@ async def chat_stream(
     conversation_id = conversation.id
     user_id = user.id
 
-    async def events() -> AsyncIterator[str]:
+    async def events() -> AsyncIterator[bytes]:
         async with AsyncSessionLocal() as stream_session:
             try:
                 stream_user = await stream_session.get(User, user_id)
@@ -69,16 +70,20 @@ async def chat_stream(
                 async for event in stream_agent_response(
                     stream_session, stream_user, stream_conversation, payload.prompt
                 ):
-                    yield _sse(event)
+                    yield _sse(event).encode("utf-8")
             except Exception:
                 await stream_session.rollback()
                 logger.exception("Streaming agent request failed")
-                yield _sse({"type": "error", "message": "Agent request failed"})
+                yield _sse({"type": "error", "message": "Agent request failed"}).encode("utf-8")
 
     return StreamingResponse(
         events(),
         media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "X-Conversation-ID": str(conversation_id),
+        },
     )
 
 

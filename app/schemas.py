@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Optional
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
@@ -29,7 +30,7 @@ class TokenResponse(BaseModel):
 
 class ChatRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=20_000)
-    conversation_id: UUID | None = None
+    conversation_id: Optional[UUID] = None
 
 
 class ConversationRead(BaseModel):
@@ -45,7 +46,7 @@ class MessageRead(BaseModel):
 
     id: UUID
     role: str
-    content: str | None
+    content: Optional[str]
     created_at: datetime
 
 
@@ -55,16 +56,16 @@ class ConversationDetail(ConversationRead):
 
 class RunRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=20_000)
-    conversation_id: UUID | None = None
+    conversation_id: Optional[UUID] = None
 
 
 class RunRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
-    conversation_id: UUID | None
+    conversation_id: Optional[UUID]
     prompt: str
     status: str
-    result: str | None
-    error: str | None
+    result: Optional[str]
+    error: Optional[str]
     created_at: datetime

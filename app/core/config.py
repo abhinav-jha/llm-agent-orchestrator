@@ -8,11 +8,12 @@ class Settings(BaseSettings):
 
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/agentdb"
     redis_url: str = "redis://localhost:6379/0"
-    openai_api_key: str = ""
+    gemini_api_key: str = ""
     jwt_private_key_path: str = ".secrets/jwt-private.pem"
     jwt_public_key_path: str = ".secrets/jwt-public.pem"
     access_token_expire_minutes: int = 60
-    openai_model: str = "gpt-4o-mini"
+    gemini_model: str = "gemini-2.5-flash"
+    gemini_embedding_model: str = "gemini-embedding-001"
     agent_max_tool_rounds: int = 5
 
 

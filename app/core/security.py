@@ -1,5 +1,6 @@
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Optional
 from uuid import UUID
 
 from jose import JWTError, jwt
@@ -8,7 +9,7 @@ from passlib.context import CryptContext
 from app.core.config import settings
 
 ALGORITHM = "RS256"
-password_context = CryptContext(schemes=["bcrypt_sha256"], deprecated="auto")
+password_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 
 
 def _read_key(path: str, key_type: str) -> str:
@@ -30,7 +31,7 @@ def verify_password(password: str, password_hash: str) -> bool:
 
 
 def create_access_token(subject: UUID) -> str:
-    expires_at = datetime.now(UTC) + timedelta(minutes=settings.access_token_expire_minutes)
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=settings.access_token_expire_minutes)
     return jwt.encode(
         {"sub": str(subject), "exp": expires_at},
         _read_key(settings.jwt_private_key_path, "private"),
@@ -38,7 +39,7 @@ def create_access_token(subject: UUID) -> str:
     )
 
 
-def decode_access_token(token: str) -> UUID | None:
+def decode_access_token(token: str) -> Optional[UUID]:
     try:
         subject = jwt.decode(
             token,
